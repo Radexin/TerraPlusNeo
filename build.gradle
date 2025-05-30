@@ -2,6 +2,7 @@ plugins {
     id 'java-library'
     id 'maven-publish'
     id 'net.neoforged.gradle.userdev' version '7.0.184'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
 tasks.named('wrapper', Wrapper).configure {
@@ -18,6 +19,43 @@ group = mod_group_id
 
 repositories {
     mavenLocal()
+    mavenCentral()
+
+    // Paper/Bukkit repositories
+    maven {
+        name = 'papermc'
+        url = 'https://repo.papermc.io/repository/maven-public/'
+    }
+
+    // Sonatype repository
+    maven {
+        name = 'sonatype'
+        url = 'https://oss.sonatype.org/content/groups/public/'
+    }
+
+    // OpenCollab Snapshots
+    maven {
+        name = 'OpenCollab Snapshots'
+        url = 'https://repo.opencollab.dev/snapshot/'
+    }
+
+    // JitPack for GitHub dependencies
+    maven {
+        name = 'jitpack'
+        url = 'https://jitpack.io'
+    }
+
+    // Daporkchop repository for PorkLib
+    maven {
+        name = 'Daporkchop_'
+        url = 'https://maven.daporkchop.net/'
+    }
+
+    // dmulloy2 repository for ProtocolLib
+    maven {
+        name = 'dmulloy2-repo'
+        url = 'https://repo.dmulloy2.net/repository/public/'
+    }
 }
 
 base {
@@ -88,35 +126,28 @@ configurations {
 }
 
 dependencies {
-    // Specify the version of Minecraft to use.
-    // Depending on the plugin applied there are several options. We will assume you applied the userdev plugin as shown above.
-    // The group for userdev is net.neoforged, the module name is neoforge, and the version is the same as the neoforge version.
-    // You can however also use the vanilla plugin (net.neoforged.gradle.vanilla) to use a version of Minecraft without the neoforge loader.
-    // And its provides the option to then use net.minecraft as the group, and one of; client, server or joined as the module name, plus the game version as version.
-    // For all intends and purposes: You can treat this dependency as if it is a normal library you would use.
+    // NeoForge
     implementation "net.neoforged:neoforge:${neo_version}"
 
-    // Example optional mod dependency with JEI
-    // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
-    // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"
-    // compileOnly "mezz.jei:jei-${mc_version}-neoforge-api:${jei_version}"
-    // We add the full version to localRuntime, not runtimeOnly, so that we do not publish a dependency on it
-    // localRuntime "mezz.jei:jei-${mc_version}-neoforge:${jei_version}"
+    // Compile-time only dependencies (provided scope in Maven)
+    compileOnly 'org.projectlombok:lombok:1.18.38'
+    compileOnly 'com.comphenix.protocol:ProtocolLib:5.3.0'
 
-    // Example mod dependency using a mod jar from ./libs with a flat dir repository
-    // This maps to ./libs/coolmod-${mc_version}-${coolmod_version}.jar
-    // The group id is ignored when searching -- in this case, it is "blank"
-    // implementation "blank:coolmod-${mc_version}:${coolmod_version}"
+    // Note: Paper API is not needed for NeoForge mods, replaced by NeoForge API above
+    // compileOnly 'io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT'
 
-    // Example mod dependency using a file as dependency
-    // implementation files("libs/coolmod-${mc_version}-${coolmod_version}.jar")
-
-    // Example project dependency using a sister or child project:
-    // implementation project(":myproject")
-
-    // For more info:
-    // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
-    // http://www.gradle.org/docs/current/userguide/dependency_management.html
+    // Implementation dependencies (compile scope in Maven)
+    implementation 'io.papermc:paperlib:1.0.8'
+    implementation 'com.google.code.gson:gson:2.13.0'
+    implementation 'com.github.BTEUK:terraminusminus:41d3843'
+    implementation 'com.google.guava:guava:33.4.8-jre'
+    implementation 'org.apache.commons:commons-lang3:3.17.0'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    implementation 'io.netty:netty-buffer:4.2.0.Final'
+    implementation 'org.jetbrains:annotations:26.0.2'
+    implementation 'commons-io:commons-io:2.19.0'
+    implementation 'net.daporkchop.lib:common:0.5.7-SNAPSHOT'
+    implementation 'lzma:lzma:0.0.1'
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.
@@ -168,4 +199,27 @@ idea {
         downloadSources = true
         downloadJavadoc = true
     }
+}
+
+// Shadow jar configuration to replicate Maven shade plugin functionality
+shadowJar {
+    // Relocate packages to avoid conflicts
+    relocate 'com.google.gson', 'de.btegermany.terraplusminus.libs.gson'
+    relocate 'com.google.guava', 'de.btegermany.terraplusminus.libs.guava'
+    relocate 'org.apache.commons', 'de.btegermany.terraplusminus.libs.commons'
+    relocate 'com.fasterxml.jackson', 'de.btegermany.terraplusminus.libs.jackson'
+    relocate 'io.netty', 'de.btegermany.terraplusminus.libs.netty'
+    relocate 'org.jetbrains.annotations', 'de.btegermany.terraplusminus.libs.annotations'
+    relocate 'net.daporkchop.lib', 'de.btegermany.terraplusminus.libs.porklib'
+
+    // Exclude provided dependencies from shadow jar
+    dependencies {
+        exclude(dependency('org.projectlombok:lombok'))
+        exclude(dependency('com.comphenix.protocol:ProtocolLib'))
+    }
+
+    archiveClassifier = ''
+
+    // Ensure shadow jar is built as part of the build process
+    build.dependsOn shadowJar
 }
