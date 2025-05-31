@@ -1,49 +1,67 @@
 package de.btegermany.terraplusminus.commands;
 
-import de.btegermany.terraplusminus.Terraplusminus;
-import io.papermc.paper.command.brigadier.BasicCommand;
-import io.papermc.paper.command.brigadier.CommandSourceStack;
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.context.CommandContext;
+import de.btegermany.terraplusminus.Config;
+import de.btegermany.terraplusminus.terraplusminus;
 import net.buildtheearth.terraminusminus.generator.EarthGeneratorSettings;
 import net.buildtheearth.terraminusminus.projection.OutOfProjectionBoundsException;
-import net.md_5.bungee.api.chat.ClickEvent;
-import net.md_5.bungee.api.chat.ComponentBuilder;
-import net.md_5.bungee.api.chat.HoverEvent;
-import net.md_5.bungee.api.chat.TextComponent;
-import org.bukkit.entity.Player;
-import org.jetbrains.annotations.NotNull;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.server.level.ServerPlayer;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
-public class WhereCommand implements BasicCommand {
+@EventBusSubscriber(modid = terraplusminus.MODID, bus = EventBusSubscriber.Bus.GAME)
+public class WhereCommand {
 
-    private final EarthGeneratorSettings bteGeneratorSettings = EarthGeneratorSettings.parse(EarthGeneratorSettings.BTE_DEFAULT_SETTINGS);
+    private static final EarthGeneratorSettings bteGeneratorSettings = EarthGeneratorSettings.parse(EarthGeneratorSettings.BTE_DEFAULT_SETTINGS);
 
-    @Override
-    public void execute(@NotNull CommandSourceStack stack, @NotNull String[] args) {
-        if (!(stack.getSender() instanceof Player)) {
-            stack.getSender().sendMessage("This command can only be used by players!");
-            return;
+    @SubscribeEvent
+    public static void onRegisterCommands(RegisterCommandsEvent event) {
+        CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
+
+        dispatcher.register(Commands.literal("where")
+            .requires(source -> source.hasPermission(0)) // Allow all players
+            .executes(WhereCommand::execute));
+    }
+
+    private static int execute(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+
+        if (!(source.getEntity() instanceof ServerPlayer)) {
+            source.sendSystemMessage(Component.literal("This command can only be used by players!"));
+            return 0;
         }
-        Player player = (Player) stack.getSender();
-        if (!player.hasPermission("t+-.where")) {
-            player.sendMessage(Terraplusminus.config.getString("prefix") + "§7No permission for /where");
-            return;
-        }
-        int xOffset = Terraplusminus.config.getInt("terrain_offset.x");
-        int zOffset = Terraplusminus.config.getInt("terrain_offset.z");
+
+        ServerPlayer player = (ServerPlayer) source.getEntity();
+        int xOffset = Config.terrainOffsetX;
+        int zOffset = Config.terrainOffsetZ;
 
         double[] mcCoordinates = new double[2];
-        mcCoordinates[0] = player.getLocation().getX() - xOffset;
-        mcCoordinates[1] = player.getLocation().getZ() - zOffset;
-        System.out.println(mcCoordinates[0] + ", " + mcCoordinates[1]);
-        double[] coordinates = new double[0];
+        mcCoordinates[0] = player.getX() - xOffset;
+        mcCoordinates[1] = player.getZ() - zOffset;
+
+        final double[] coordinates;
         try {
             coordinates = bteGeneratorSettings.projection().toGeo(mcCoordinates[0], mcCoordinates[1]);
         } catch (OutOfProjectionBoundsException e) {
-            e.printStackTrace();
+            player.sendSystemMessage(Component.literal(Config.prefix + "§cLocation is not within projection bounds"));
+            return 0;
         }
-        TextComponent message = new TextComponent(Terraplusminus.config.getString("prefix") + "§7Your coordinates are:");
-        message.addExtra("\n§8" + coordinates[1] + ", " + coordinates[0] + "§7.");
-        message.setClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://maps.google.com/maps?t=k&q=loc:" + coordinates[1] + "+" + coordinates[0]));
-        message.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder("§7Click here to view in Google Maps.").create()));
-        player.spigot().sendMessage(message);
+
+        // Create clickable message component
+        MutableComponent message = Component.literal(Config.prefix + "§7Your coordinates are:\n§8" + coordinates[1] + ", " + coordinates[0] + "§7.")
+            .withStyle(style -> style
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://maps.google.com/maps?t=k&q=loc:" + coordinates[1] + "+" + coordinates[0]))
+                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal("§7Click here to view in Google Maps."))));
+
+        player.sendSystemMessage(message);
+        return 1;
     }
 }
