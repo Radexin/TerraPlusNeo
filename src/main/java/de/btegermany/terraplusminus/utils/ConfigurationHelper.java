@@ -1,8 +1,10 @@
 package de.btegermany.terraplusminus.utils;
 
-import de.btegermany.terraplusminus.Terraplusminus;
-import org.bukkit.Material;
-import org.bukkit.configuration.file.FileConfiguration;
+import de.btegermany.terraplusminus.Config;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
@@ -10,27 +12,23 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 public final class ConfigurationHelper {
-    private static final List<LinkedWorld> worlds = convertList(Terraplusminus.config.getMapList("linked_worlds.worlds"));
 
     /**
-     * Returns a material from the configuration,
-     * or a default value if the configuration path is either missing or the value is not a valid material identifier.
+     * Returns a block from the configuration,
+     * or a default value if the configuration path is either missing or the value is not a valid block identifier.
      *
-     * @param config        the configuration file to read from
-     * @param path          the configuration path to retrieve
+     * @param blockName     the block name to parse
      * @param defaultValue  a default value to return if the value is missing from the config or invalid
-     * @return a {@link Material} from the configuration, or {@code defaultValue} as a fallback
+     * @return a {@link Block} from the configuration, or {@code defaultValue} as a fallback
      */
-    public static Material getMaterial(@NotNull FileConfiguration config, @NotNull String path, Material defaultValue) {
-        String materialName = config.getString(path);
-        if (materialName == null) {
+    public static Block getBlock(@NotNull String blockName, Block defaultValue) {
+        try {
+            ResourceLocation resourceLocation = ResourceLocation.parse(blockName);
+            Block block = BuiltInRegistries.BLOCK.get(resourceLocation);
+            return block != null ? block : defaultValue;
+        } catch (Exception e) {
             return defaultValue;
         }
-        Material material = Material.getMaterial(materialName);
-        if (material == null) {
-            return defaultValue;
-        }
-        return material;
     }
 
     private ConfigurationHelper() {
@@ -51,6 +49,7 @@ public final class ConfigurationHelper {
     }
 
     public static LinkedWorld getNextServerName(String currentWorldName) {
+        List<LinkedWorld> worlds = Config.linkedWorlds;
         int currentIndex = -1;
 
         for (int i = 0; i < worlds.size(); i++) {
@@ -70,6 +69,7 @@ public final class ConfigurationHelper {
     }
 
     public static LinkedWorld getPreviousServerName(String currentWorldName) {
+        List<LinkedWorld> worlds = Config.linkedWorlds;
         int currentIndex = -1;
 
         for (int i = 0; i < worlds.size(); i++) {
@@ -89,7 +89,7 @@ public final class ConfigurationHelper {
     }
 
     public static List<LinkedWorld> getWorlds() {
-        return worlds;
+        return Config.linkedWorlds;
     }
 
 }
