@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import de.btegermany.terraplusminus.utils.LinkedWorld;
+// Removed LinkedWorld import - no longer needed
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
@@ -15,7 +15,7 @@ import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 // TerraPlusNeo configuration class - converted from Paper plugin config.yml
-@EventBusSubscriber(modid = terraplusminus.MODID, bus = EventBusSubscriber.Bus.MOD)
+@EventBusSubscriber(modid = Terraplusminus.MODID, bus = EventBusSubscriber.Bus.MOD)
 public class Config
 {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
@@ -90,28 +90,6 @@ public class Config
         BUILDER.pop();
     }
 
-    // Linked worlds
-    static {
-        BUILDER.comment("If the height limit in this world/server is not enough, other worlds/servers can be linked to generate higher or lower sections")
-               .push("linked_worlds");
-    }
-
-    private static final ModConfigSpec.BooleanValue LINKED_WORLDS_ENABLED = BUILDER
-            .comment("Enable linked worlds functionality")
-            .define("enabled", false);
-
-    private static final ModConfigSpec.EnumValue<LinkedWorldMethod> LINKED_WORLDS_METHOD = BUILDER
-            .comment("Method for linked worlds: SERVER or MULTIVERSE")
-            .defineEnum("method", LinkedWorldMethod.MULTIVERSE);
-
-    private static final ModConfigSpec.ConfigValue<List<? extends String>> LINKED_WORLDS_LIST = BUILDER
-            .comment("List of linked worlds in format 'worldname:offset'. Example: 'world_upper:2032'")
-            .defineListAllowEmpty("worlds", List.of("current_world:0"), Config::validateLinkedWorld);
-
-    static {
-        BUILDER.pop();
-    }
-
     // Generation settings
     private static final ModConfigSpec.BooleanValue GENERATE_TREES = BUILDER
             .comment("If disabled, tree generation is turned off.")
@@ -153,11 +131,6 @@ public class Config
 
     static final ModConfigSpec SPEC = BUILDER.build();
 
-    // Enum for linked world methods
-    public enum LinkedWorldMethod {
-        SERVER, MULTIVERSE
-    }
-
     // Static config values accessible throughout the mod
     public static String prefix;
     public static boolean reducedConsoleMessages;
@@ -171,9 +144,6 @@ public class Config
     public static int terrainOffsetX;
     public static int terrainOffsetY;
     public static int terrainOffsetZ;
-    public static boolean linkedWorldsEnabled;
-    public static LinkedWorldMethod linkedWorldsMethod;
-    public static List<LinkedWorld> linkedWorlds;
     public static boolean generateTrees;
     public static boolean differentBiomes;
     public static Block surfaceMaterial;
@@ -193,18 +163,6 @@ public class Config
         }
     }
 
-    private static boolean validateLinkedWorld(final Object obj) {
-        if (!(obj instanceof String worldString)) return false;
-        try {
-            String[] parts = worldString.split(":");
-            if (parts.length != 2) return false;
-            Integer.parseInt(parts[1]); // Validate offset is a number
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     private static Block getBlockFromString(String blockName, Block defaultBlock) {
         try {
             ResourceLocation resourceLocation = ResourceLocation.parse(blockName);
@@ -213,26 +171,6 @@ public class Config
         } catch (Exception e) {
             return defaultBlock;
         }
-    }
-
-    private static List<LinkedWorld> parseLinkedWorlds(List<? extends String> worldStrings) {
-        return worldStrings.stream()
-                .map(worldString -> {
-                    try {
-                        String[] parts = worldString.split(":");
-                        if (parts.length == 2) {
-                            String worldName = parts[0];
-                            int offset = Integer.parseInt(parts[1]);
-                            return new LinkedWorld(worldName, offset);
-                        }
-                    } catch (Exception e) {
-                        // Invalid format, skip
-                    }
-                    return null;
-                })
-                .filter(world -> world != null)
-                .filter(world -> !world.getWorldName().equalsIgnoreCase("another_world/server"))
-                .collect(Collectors.toList());
     }
 
     @SubscribeEvent
@@ -250,9 +188,6 @@ public class Config
         terrainOffsetX = TERRAIN_OFFSET_X.get();
         terrainOffsetY = TERRAIN_OFFSET_Y.get();
         terrainOffsetZ = TERRAIN_OFFSET_Z.get();
-        linkedWorldsEnabled = LINKED_WORLDS_ENABLED.get();
-        linkedWorldsMethod = LINKED_WORLDS_METHOD.get();
-        linkedWorlds = parseLinkedWorlds(LINKED_WORLDS_LIST.get());
         generateTrees = GENERATE_TREES.get();
         differentBiomes = DIFFERENT_BIOMES.get();
         surfaceMaterial = getBlockFromString(SURFACE_MATERIAL.get(), Blocks.GRASS_BLOCK);
@@ -267,7 +202,6 @@ public class Config
         return switch (path) {
             case "prefix" -> prefix;
             case "passthrough_tpll" -> passthroughTpll;
-            case "linked_worlds.method" -> linkedWorldsMethod.name();
             default -> "";
         };
     }
@@ -277,7 +211,6 @@ public class Config
             case "reduced_console_messages" -> reducedConsoleMessages;
             case "height_datapack" -> heightDatapack;
             case "height_in_actionbar" -> heightInActionbar;
-            case "linked_worlds.enabled" -> linkedWorldsEnabled;
             case "generate_trees" -> generateTrees;
             case "different_biomes" -> differentBiomes;
             default -> false;
@@ -303,14 +236,5 @@ public class Config
             case "config_version" -> configVersion;
             default -> 0.0;
         };
-    }
-
-    public static List<Map<?, ?>> getMapList(String path) {
-        if ("linked_worlds.worlds".equals(path)) {
-            return linkedWorlds.stream()
-                    .map(world -> Map.of("name", world.getWorldName(), "offset", world.getOffset()))
-                    .collect(Collectors.toList());
-        }
-        return List.of();
     }
 }

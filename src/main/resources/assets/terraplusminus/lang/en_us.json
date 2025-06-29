@@ -1,5 +1,17 @@
 {
-  "itemGroup.terraplusminus": "Example Mod Tab",
-  "block.terraplusminus.example_block": "Example Block",
-  "item.terraplusminus.example_item": "Example Item"
+  "generator.terraplusminus.earth": "Earth",
+  "commands.tpll.success": "Teleported to %s, %s",
+  "commands.tpll.success.height": "Teleported to %s, %s, %s",
+  "commands.tpll.bounds": "You cannot teleport to these coordinates, because this area is being worked on by another build team.",
+  "commands.tpll.not_earth": "The world generator must be set to Terraplusminus",
+  "commands.tpll.out_of_bounds": "Location is not within projection bounds",
+  "commands.tpll.too_high": "You cannot teleport to these coordinates, because the world is not high enough.",
+  "commands.tpll.too_low": "You cannot teleport to these coordinates, because the world is not low enough.",
+  "commands.where.out_of_bounds": "Location is not within projection bounds",
+  "commands.where.success": "Your coordinates are: %s, %s",
+  "commands.where.click": "Click here to view in Google Maps.",
+  "commands.offset.header": "Offsets:",
+  "commands.offset.x": " | X: %s",
+  "commands.offset.y": " | Y: %s",
+  "commands.offset.z": " | Z: %s"
 }

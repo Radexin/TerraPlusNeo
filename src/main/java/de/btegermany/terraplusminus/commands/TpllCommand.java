@@ -1,271 +1,155 @@
 package de.btegermany.terraplusminus.commands;
 
-import com.google.common.io.ByteArrayDataOutput;
-import com.google.common.io.ByteStreams;
-import de.btegermany.terraplusminus.Terraplusminus;
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
+import de.btegermany.terraplusminus.Config;
 import de.btegermany.terraplusminus.data.TerraConnector;
 import de.btegermany.terraplusminus.gen.RealWorldGenerator;
-import de.btegermany.terraplusminus.utils.ConfigurationHelper;
-import de.btegermany.terraplusminus.utils.LinkedWorld;
-import io.papermc.lib.PaperLib;
-import io.papermc.paper.command.brigadier.BasicCommand;
-import io.papermc.paper.command.brigadier.CommandSourceStack;
 import net.buildtheearth.terraminusminus.generator.EarthGeneratorSettings;
 import net.buildtheearth.terraminusminus.projection.GeographicProjection;
 import net.buildtheearth.terraminusminus.projection.OutOfProjectionBoundsException;
-import org.bukkit.Bukkit;
-import org.bukkit.Location;
-import org.bukkit.Material;
-import org.bukkit.World;
-import org.bukkit.entity.Player;
-import org.bukkit.generator.ChunkGenerator;
-import org.jetbrains.annotations.NotNull;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.phys.Vec3;
 
-import static org.bukkit.ChatColor.RED;
+import java.util.Collection;
+import java.util.Collections;
 
+public class TpllCommand {
 
-public class TpllCommand implements BasicCommand {
+    public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+        LiteralArgumentBuilder<CommandSourceStack> tpllCommand = Commands.literal("tpll")
+                .requires(source -> source.hasPermission(2) || source.getServer().isSingleplayer())
+                .then(Commands.argument("latitude", DoubleArgumentType.doubleArg(-90, 90))
+                        .then(Commands.argument("longitude", DoubleArgumentType.doubleArg(-180, 180))
+                                .executes(context -> execute(context, Collections.singleton(context.getSource().getPlayerOrException()), 
+                                        DoubleArgumentType.getDouble(context, "latitude"),
+                                        DoubleArgumentType.getDouble(context, "longitude"), 
+                                        null))
+                                .then(Commands.argument("height", DoubleArgumentType.doubleArg())
+                                        .executes(context -> execute(context, Collections.singleton(context.getSource().getPlayerOrException()),
+                                                DoubleArgumentType.getDouble(context, "latitude"),
+                                                DoubleArgumentType.getDouble(context, "longitude"),
+                                                DoubleArgumentType.getDouble(context, "height"))))))
+                .then(Commands.argument("targets", EntityArgument.players())
+                        .requires(source -> source.hasPermission(3))
+                        .then(Commands.argument("latitude", DoubleArgumentType.doubleArg(-90, 90))
+                                .then(Commands.argument("longitude", DoubleArgumentType.doubleArg(-180, 180))
+                                        .executes(context -> execute(context, EntityArgument.getPlayers(context, "targets"),
+                                                DoubleArgumentType.getDouble(context, "latitude"),
+                                                DoubleArgumentType.getDouble(context, "longitude"),
+                                                null))
+                                        .then(Commands.argument("height", DoubleArgumentType.doubleArg())
+                                                .executes(context -> execute(context, EntityArgument.getPlayers(context, "targets"),
+                                                        DoubleArgumentType.getDouble(context, "latitude"),
+                                                        DoubleArgumentType.getDouble(context, "longitude"),
+                                                        DoubleArgumentType.getDouble(context, "height")))))));
 
-    @Override
-    public void execute(@NotNull CommandSourceStack stack, @NotNull String[] args) {
-
-        Player player = (Player) stack.getSender();
-        if (!player.hasPermission("t+-.tpll")) {
-            player.sendMessage(Terraplusminus.config.getString("prefix") + "§7No permission for /tpll");
-            return;
-        }
-
-
-        // Entity selector
-
-        // detect if command starts with @ or with a player name
-
-        if ((args[0].startsWith("@") || !isDouble(args[0].replace(",", "").replace("°", ""))) && player.hasPermission("t+-.forcetpll")) {
-            if (args[0].equals("@a")) {
-                StringBuilder playerList = new StringBuilder();
-                Terraplusminus.instance.getServer().getOnlinePlayers().forEach(p -> {
-                    p.chat("/tpll " + String.join(" ", args).substring(2));
-                    if (Terraplusminus.instance.getServer().getOnlinePlayers().size() > 1) {
-                        playerList.append(p.getName()).append(", ");
-                    } else {
-                        playerList.append(p.getName()).append(" ");
-                    }
-                });
-                // delete last comma if no player follows
-                if (playerList.length() > 0 && playerList.charAt(playerList.length() - 2) == ',') {
-                    playerList.deleteCharAt(playerList.length() - 2);
-                }
-                player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Teleported §9" + playerList + "§7to" + String.join(" ", args).substring(2));
-                return;
-            } else if (args[0].equals("@p")) {
-                // find nearest player but not the player itself
-                Player nearestPlayer = null;
-                double nearestDistance = Double.MAX_VALUE;
-                for (Player p : Terraplusminus.instance.getServer().getOnlinePlayers()) {
-                    if (p.getLocation().distanceSquared(player.getLocation()) < nearestDistance && (!p.equals(player) || Terraplusminus.instance.getServer().getOnlinePlayers().size() == 1)) {
-                        nearestPlayer = p;
-                        nearestDistance = p.getLocation().distanceSquared(player.getLocation());
-                    }
-                }
-                if (nearestPlayer != null) {
-                    player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Teleported §9" + nearestPlayer.getName() + " §7to" + String.join(" ", args).substring(2));
-                    nearestPlayer.chat("/tpll " + String.join(" ", args).substring(2));
-                }
-                return;
-            } else {
-                Player target = null;
-                //check if target player is online
-                for (Player p : Terraplusminus.instance.getServer().getOnlinePlayers()) {
-                    if (p.getName().equals(args[0])) {
-                        target = p;
-                    }
-                }
-
-                if (target == null) {
-                    player.sendMessage(Terraplusminus.config.getString("prefix") + "§cNo player found with name §9" + args[0]);
-                    return;
-                }
-
-                player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Teleported §9" + target.getName() + " §7to " + args[1] + " " + args[2]);
-                target.chat("/tpll " + String.join(" ", args).replace(target.getName(), ""));
-                return;
-            }
-        }
-
-        //Option to passthrough tpll to other bukkit plugins.
-        String passthroughTpll = Terraplusminus.config.getString("passthrough_tpll");
-        if (!passthroughTpll.isEmpty()) {
-            //Check if any args are parsed.
-            if (args.length == 0) {
-                player.chat("/" + passthroughTpll + ":tpll");
-            } else {
-                player.chat("/" + passthroughTpll + ":tpll " + String.join(" ", args));
-            }
-            return;
-        }
-
-        //If sender is not a player cancel the command.
-        if (!(stack.getSender() instanceof Player)) {
-            stack.getSender().sendMessage("This command can only be used by players!");
-            return;
-        }
-
-        // -
-        if (args.length >= 2) {
-
-            World tpWorld = player.getWorld();
-
-            int xOffset = Terraplusminus.config.getInt("terrain_offset.x");
-            int zOffset = Terraplusminus.config.getInt("terrain_offset.z");
-            double minLat = Terraplusminus.config.getDouble("min_latitude");
-            double maxLat = Terraplusminus.config.getDouble("max_latitude");
-            double minLon = Terraplusminus.config.getDouble("min_longitude");
-            double maxLon = Terraplusminus.config.getDouble("max_longitude");
-
-            double[] coordinates = new double[2];
-            try {
-                coordinates[1] = Double.parseDouble(args[0].replace(",", "").replace("°", ""));
-                coordinates[0] = Double.parseDouble(args[1].replace("°", ""));
-            } catch (NumberFormatException e) {
-                stack.getSender().sendMessage(RED + "Invalid coordinates or command usage!");
-                stack.getSender().sendMessage(RED + "Proper usage: /tpll <latitude> <longitude> [height (optional]");
-                return;
-            }
-
-            ChunkGenerator generator = tpWorld.getGenerator();
-            if (!(generator instanceof RealWorldGenerator)) { // after server reload the generator isnt instanceof RealWorldGenerator anymore
-                stack.getSender().sendMessage(Terraplusminus.config.getString("prefix") + RED + "The world generator must be set to Terraplusminus");
-                return;
-            }
-            RealWorldGenerator terraGenerator = (RealWorldGenerator) generator;
-            EarthGeneratorSettings generatorSettings = terraGenerator.getSettings();
-            GeographicProjection projection = generatorSettings.projection();
-            int yOffset = terraGenerator.getYOffset();
-
-            double[] mcCoordinates;
-            try {
-                mcCoordinates = projection.fromGeo(coordinates[0], coordinates[1]);
-            } catch (OutOfProjectionBoundsException e) {
-                stack.getSender().sendMessage(RED + "Location is not within projection bounds");
-                return;
-            }
-
-            if (minLat != 0 && maxLat != 0 && minLon != 0 && maxLon != 0 && !player.hasPermission("t+-.admin")) {
-                if (coordinates[1] < minLat || coordinates[0] < minLon || coordinates[1] > maxLat || coordinates[0] > maxLon) {
-                    player.sendMessage(Terraplusminus.config.getString("prefix") + RED + "You cannot tpll to these coordinates, because this area is being worked on by another build team.");
-                    return;
-                }
-            }
-
-            TerraConnector terraConnector = new TerraConnector();
-
-            double height;
-            if (args.length >= 3) {
-                height = Double.parseDouble(args[2]) + yOffset;
-            } else {
-                height = terraConnector.getHeight((int) mcCoordinates[0], (int) mcCoordinates[1]).join() + yOffset; // 57 + (-2032) = -1975
-            }
-            if (height > player.getWorld().getMaxHeight()) {
-                if (Terraplusminus.config.getBoolean("linked_worlds.enabled")) {
-                    if (Terraplusminus.config.getString("linked_worlds.method").equalsIgnoreCase("SERVER")) {
-                        //send player uuid and coordinates to bungee
-                        sendPluginMessageToBungeeBridge(true, player, coordinates);
-                        return;
-                    } else if (Terraplusminus.config.getString("linked_worlds.method").equalsIgnoreCase("MULTIVERSE")) {
-                        LinkedWorld nextServer = ConfigurationHelper.getNextServerName(player.getWorld().getName());
-                        if (nextServer == null) {
-                            player.sendMessage(Terraplusminus.config.getString("prefix") + "§cYou cannot tpll to these coordinates, because the world is not high enough at the moment.");
-                            return;
-                        }
-                        tpWorld = Bukkit.getWorld(nextServer.getWorldName());
-                        height = height - yOffset + nextServer.getOffset();
-                        player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Teleporting to " + coordinates[1] + ", " + coordinates[0] + " in another world. This may take a bit...");
-                        //player.teleport(new Location(tpWorld, mcCoordinates[0] + xOffset, height, mcCoordinates[1] + zOffset, player.getLocation().getYaw(), player.getLocation().getPitch()));
-                        PaperLib.teleportAsync(player, new Location(tpWorld, mcCoordinates[0] + xOffset, height, mcCoordinates[1] + zOffset, player.getLocation().getYaw(), player.getLocation().getPitch()));
-                        return;
-                    }
-                } else {
-                    player.sendMessage(Terraplusminus.config.getString("prefix") + "§cYou cannot tpll to these coordinates, because the world is not high enough at the moment.");
-                    return;
-                }
-            } else if (height <= player.getWorld().getMinHeight()) {
-                if (Terraplusminus.config.getBoolean("linked_worlds.enabled")) {
-                    if (Terraplusminus.config.getString("linked_worlds.method").equalsIgnoreCase("SERVER")) {
-                        //send player uuid and coordinates to bungee
-                        sendPluginMessageToBungeeBridge(false, player, coordinates);
-                        return;
-                    } else if (Terraplusminus.config.getString("linked_worlds.method").equalsIgnoreCase("MULTIVERSE")) {
-                        LinkedWorld previousServer = ConfigurationHelper.getPreviousServerName(player.getWorld().getName());
-                        if (previousServer == null) {
-                            player.sendMessage(Terraplusminus.config.getString("prefix") + "§cYou cannot tpll to these coordinates, because the world is not low enough at the moment.");
-                            return;
-                        }
-                        tpWorld = Bukkit.getWorld(previousServer.getWorldName());
-                        height = height - yOffset + previousServer.getOffset();
-                        player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Teleporting to " + coordinates[1] + ", " + coordinates[0] + " in another world. This may take a bit...");
-                        PaperLib.teleportAsync(player, new Location(tpWorld, mcCoordinates[0] + xOffset, height, mcCoordinates[1] + zOffset, player.getLocation().getYaw(), player.getLocation().getPitch()));
-                        return;
-                    }
-                } else {
-                    player.sendMessage(Terraplusminus.config.getString("prefix") + "§cYou cannot tpll to these coordinates, because the world is not low enough at the moment.");
-                    return;
-                }
-            }
-            Location location = new Location(tpWorld, mcCoordinates[0], height, mcCoordinates[1], player.getLocation().getYaw(), player.getLocation().getPitch());
-
-            if (PaperLib.isChunkGenerated(location)) {
-                if (args.length >= 3) {
-                    location = new Location(tpWorld, mcCoordinates[0], height, mcCoordinates[1], player.getLocation().getYaw(), player.getLocation().getPitch());
-                } else {
-                    location = new Location(tpWorld, mcCoordinates[0], tpWorld.getHighestBlockYAt((int) mcCoordinates[0], (int) mcCoordinates[1]) + 1, mcCoordinates[1], player.getLocation().getYaw(), player.getLocation().getPitch());
-                }
-            } else {
-                player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Location is generating. Please wait a moment...");
-            }
-            PaperLib.teleportAsync(player, location);
-
-
-            if (args.length >= 3) {
-                player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Teleported to " + coordinates[1] + ", " + coordinates[0] + ", " + height + ".");
-            } else {
-                player.sendMessage(Terraplusminus.config.getString("prefix") + "§7Teleported to " + coordinates[1] + ", " + coordinates[0] + ".");
-            }
-
-            return;
-
-        }
-        return;
+        dispatcher.register(tpllCommand);
+        
+        // Register alias
+        dispatcher.register(Commands.literal("tpc").redirect(dispatcher.getRoot().getChild("tpll")));
     }
 
-    private static boolean sendPluginMessageToBungeeBridge(boolean isNextServer, Player player, double[] coordinates) {
-        ByteArrayDataOutput out = ByteStreams.newDataOutput();
-        out.writeUTF(player.getUniqueId().toString());
-        LinkedWorld server;
-        if (isNextServer) {
-            server = ConfigurationHelper.getNextServerName(Bukkit.getServer().getName()); //TODO: Bukkit.getServer().getName() does not return the real name
-        } else {
-            server = ConfigurationHelper.getPreviousServerName(Bukkit.getServer().getName()); //TODO: Bukkit.getServer().getName() does not return the real name
+    private static int execute(CommandContext<CommandSourceStack> context, Collection<ServerPlayer> targets, double latitude, double longitude, Double height) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        
+        // Check bounds if configured
+        double minLat = Config.minLatitude;
+        double maxLat = Config.maxLatitude;
+        double minLon = Config.minLongitude;
+        double maxLon = Config.maxLongitude;
+        
+        if (minLat != 0 && maxLat != 0 && minLon != 0 && maxLon != 0 && !source.hasPermission(4)) {
+            if (latitude < minLat || latitude > maxLat || longitude < minLon || longitude > maxLon) {
+                source.sendFailure(Component.literal(Config.prefix + "§cYou cannot tpll to these coordinates, because this area is being worked on by another build team."));
+                return 0;
+            }
         }
-
-        if (server != null) {
-            out.writeUTF(server.getWorldName() + ", " + server.getOffset());
-        } else {
-            player.sendMessage(Terraplusminus.config.getString("prefix") + "§cPlease contact server administrator. Your config is not set up correctly.");
-            return true;
+        
+        // Get world generator
+        ChunkGenerator generator = level.getChunkSource().getGenerator();
+        if (!(generator instanceof RealWorldGenerator realWorldGen)) {
+            source.sendFailure(Component.literal(Config.prefix + "§cThe world generator must be set to Terraplusminus"));
+            return 0;
         }
-        out.writeUTF(coordinates[1] + ", " + coordinates[0]);
-        player.sendPluginMessage(Terraplusminus.instance, "bungeecord:terraplusminus", out.toByteArray());
-
-        player.sendMessage(Terraplusminus.config.getString("prefix") + "§cSending to another server...");
-        return true;
-    }
-
-    public boolean isDouble(String str) {
+        
+        EarthGeneratorSettings generatorSettings = realWorldGen.settings;
+        GeographicProjection projection = generatorSettings.projection();
+        int yOffset = realWorldGen.yOffset;
+        
+        // Convert coordinates
+        double[] mcCoordinates;
         try {
-            Double.parseDouble(str);
-            return true;
-        } catch (NumberFormatException e) {
-            return false;
+            mcCoordinates = projection.fromGeo(longitude, latitude);
+        } catch (OutOfProjectionBoundsException e) {
+            source.sendFailure(Component.literal("§cLocation is not within projection bounds"));
+            return 0;
         }
+        
+        // Apply terrain offset
+        double x = mcCoordinates[0] + Config.terrainOffsetX;
+        double z = mcCoordinates[1] + Config.terrainOffsetZ;
+        
+        // Determine height
+        double finalHeight;
+        if (height != null) {
+            finalHeight = height + yOffset;
+        } else {
+            TerraConnector terraConnector = new TerraConnector();
+            finalHeight = terraConnector.getHeight((int) mcCoordinates[0], (int) mcCoordinates[1]).join() + yOffset;
+        }
+        
+        // Check height bounds
+        if (finalHeight > level.getMaxBuildHeight()) {
+            source.sendFailure(Component.literal(Config.prefix + "§cYou cannot tpll to these coordinates, because the world is not high enough."));
+            return 0;
+        } else if (finalHeight < level.getMinBuildHeight()) {
+            source.sendFailure(Component.literal(Config.prefix + "§cYou cannot tpll to these coordinates, because the world is not low enough."));
+            return 0;
+        }
+        
+        // Teleport all targets
+        for (ServerPlayer player : targets) {
+            // Check if chunk is loaded, if not, generate it
+            BlockPos blockPos = BlockPos.containing(x, finalHeight, z);
+            level.getChunk(blockPos);
+            
+            // If no specific height was given, find the highest block
+            if (height == null) {
+                int highestY = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, (int) x, (int) z);
+                finalHeight = highestY + 1;
+            }
+            
+            player.teleportTo(level, x, finalHeight, z, player.getYRot(), player.getXRot());
+            
+            if (targets.size() == 1 && player == source.getPlayer()) {
+                final double displayHeight = finalHeight;
+                source.sendSuccess(() -> Component.literal(Config.prefix + "§7Teleported to " + latitude + ", " + longitude + 
+                        (height != null ? ", " + displayHeight : "") + "."), false);
+            }
+        }
+        
+        if (targets.size() > 1 || (targets.size() == 1 && !targets.contains(source.getPlayer()))) {
+            String playerNames = targets.stream()
+                    .map(p -> p.getName().getString())
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("");
+            source.sendSuccess(() -> Component.literal(Config.prefix + "§7Teleported §9" + playerNames + " §7to " + 
+                    latitude + ", " + longitude + "."), true);
+        }
+        
+        return targets.size();
     }
 }

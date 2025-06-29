@@ -2,310 +2,324 @@ package de.btegermany.terraplusminus.gen;
 
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
-import de.btegermany.terraplusminus.Terraplusminus;
-import de.btegermany.terraplusminus.gen.tree.TreePopulator;
-import de.btegermany.terraplusminus.utils.ConfigurationHelper;
-import lombok.Getter;
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.MapCodec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
+import de.btegermany.terraplusminus.Config;
 import net.buildtheearth.terraminusminus.generator.CachedChunkData;
 import net.buildtheearth.terraminusminus.generator.ChunkDataLoader;
 import net.buildtheearth.terraminusminus.generator.EarthGeneratorSettings;
 import net.buildtheearth.terraminusminus.projection.GeographicProjection;
 import net.buildtheearth.terraminusminus.projection.transform.OffsetProjectionTransform;
-import net.buildtheearth.terraminusminus.substitutes.BlockState;
-import net.buildtheearth.terraminusminus.substitutes.BukkitBindings;
 import net.buildtheearth.terraminusminus.substitutes.ChunkPos;
-import org.bukkit.HeightMap;
-import org.bukkit.Location;
-import org.bukkit.Material;
-import org.bukkit.World;
-import org.bukkit.block.Biome;
-import org.bukkit.block.Block;
-import org.bukkit.generator.BiomeProvider;
-import org.bukkit.generator.BlockPopulator;
-import org.bukkit.generator.ChunkGenerator;
-import org.bukkit.generator.WorldInfo;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.WorldGenRegion;
+import net.minecraft.world.level.*;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.BiomeManager;
+import net.minecraft.world.level.biome.BiomeSource;
+import net.minecraft.world.level.biome.Biomes;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
+import net.minecraft.world.level.levelgen.*;
+import net.minecraft.world.level.levelgen.blending.Blender;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static java.lang.Math.min;
 import static net.buildtheearth.terraminusminus.substitutes.ChunkPos.blockToCube;
 import static net.buildtheearth.terraminusminus.substitutes.ChunkPos.cubeToMinBlock;
-import static org.bukkit.Material.BRICKS;
-import static org.bukkit.Material.DIRT;
-import static org.bukkit.Material.DIRT_PATH;
-import static org.bukkit.Material.FARMLAND;
-import static org.bukkit.Material.GRASS_BLOCK;
-import static org.bukkit.Material.GRAY_CONCRETE_POWDER;
-import static org.bukkit.Material.MOSS_BLOCK;
-import static org.bukkit.Material.MYCELIUM;
-import static org.bukkit.Material.SNOW;
-import static org.bukkit.Material.SNOW_BLOCK;
-import static org.bukkit.Material.STONE;
-import static org.bukkit.Material.WATER;
-import static org.bukkit.block.Biome.*;
 
 public class RealWorldGenerator extends ChunkGenerator {
 
-    @Getter
-    private final EarthGeneratorSettings settings;
-    @Getter
-    private final int yOffset;
-    private Location spawnLocation = null;
+    public static final MapCodec<RealWorldGenerator> CODEC = RecordCodecBuilder.mapCodec((instance) -> {
+        return instance.group(
+                BiomeSource.CODEC.fieldOf("biome_source").forGetter((generator) -> generator.biomeSource),
+                Codec.INT.fieldOf("y_offset").orElse(0).forGetter((generator) -> generator.yOffset)
+        ).apply(instance, RealWorldGenerator::new);
+    });
 
+    public final EarthGeneratorSettings settings;
+    public final int yOffset;
     private final LoadingCache<ChunkPos, CompletableFuture<CachedChunkData>> cache;
-    private final CustomBiomeProvider customBiomeProvider;
+    private final Map<String, BlockState> materialMapping;
 
-
-    private final Material surfaceMaterial;
-    private final Map<String, Material> materialMapping;
-
-    private static final Set<Material> GRASS_LIKE_MATERIALS = Set.of(
-            GRASS_BLOCK,
-            DIRT_PATH,
-            FARMLAND,
-            MYCELIUM,
-            SNOW
+    private static final Set<BlockState> GRASS_LIKE_BLOCKS = Set.of(
+            Blocks.GRASS_BLOCK.defaultBlockState(),
+            Blocks.DIRT_PATH.defaultBlockState(),
+            Blocks.FARMLAND.defaultBlockState(),
+            Blocks.MYCELIUM.defaultBlockState(),
+            Blocks.SNOW.defaultBlockState()
     );
 
-    public RealWorldGenerator(int yOffset) {
-
-        EarthGeneratorSettings settings = EarthGeneratorSettings.parse(EarthGeneratorSettings.BTE_DEFAULT_SETTINGS);
-
+    public RealWorldGenerator(BiomeSource biomeSource, int yOffset) {
+        super(biomeSource);
+        
+        this.yOffset = yOffset == 0 ? Config.terrainOffsetY : yOffset;
+        
+        EarthGeneratorSettings baseSettings = EarthGeneratorSettings.parse(EarthGeneratorSettings.BTE_DEFAULT_SETTINGS);
         GeographicProjection projection = new OffsetProjectionTransform(
-                settings.projection(),
-                Terraplusminus.config.getInt("terrain_offset.x"),
-                Terraplusminus.config.getInt("terrain_offset.z")
+                baseSettings.projection(),
+                Config.terrainOffsetX,
+                Config.terrainOffsetZ
         );
-        if (yOffset == 0) {
-            this.yOffset = Terraplusminus.config.getInt("terrain_offset.y");
-        } else {
-            this.yOffset = yOffset;
+        
+        this.settings = baseSettings.withProjection(projection);
+        
+        // If our biome source is a CustomBiomeProvider, set its projection
+        if (biomeSource instanceof CustomBiomeProvider customBiomeProvider) {
+            customBiomeProvider.setProjection(projection);
         }
-
-        this.settings = settings.withProjection(projection);
-
-        this.customBiomeProvider = new CustomBiomeProvider(projection);
+        
         this.cache = CacheBuilder.newBuilder()
                 .expireAfterAccess(5L, TimeUnit.MINUTES)
                 .softValues()
                 .build(new ChunkDataLoader(this.settings));
 
-        this.surfaceMaterial = ConfigurationHelper.getMaterial(Terraplusminus.config, "surface_material", GRASS_BLOCK);
         this.materialMapping = Map.of(
-                "minecraft:bricks", ConfigurationHelper.getMaterial(Terraplusminus.config, "building_outlines_material", BRICKS),
-                "minecraft:gray_concrete", ConfigurationHelper.getMaterial(Terraplusminus.config, "road_material", GRAY_CONCRETE_POWDER),
-                "minecraft:dirt_path", ConfigurationHelper.getMaterial(Terraplusminus.config, "path_material", MOSS_BLOCK)
+                "minecraft:bricks", Config.buildingOutlinesMaterial.defaultBlockState(),
+                "minecraft:gray_concrete", Config.roadMaterial.defaultBlockState(),
+                "minecraft:dirt_path", Config.pathMaterial.defaultBlockState()
         );
-
     }
 
+    @Override
+    public MapCodec<? extends ChunkGenerator> codec() {
+        return CODEC;
+    }
 
     @Override
-    public void generateNoise(@NotNull WorldInfo worldInfo, @NotNull Random random, int chunkX, int chunkZ, @NotNull ChunkData chunkData) {
+    public void applyCarvers(WorldGenRegion region, long seed, RandomState randomState, BiomeManager biomeManager, StructureManager structureManager, ChunkAccess chunk, GenerationStep.Carving step) {
+        // No caves, because caves scary
+    }
 
+    @Override
+    public void buildSurface(WorldGenRegion region, StructureManager structureManager, RandomState randomState, ChunkAccess chunk) {
+        // Initialize biome provider with registry if needed
+        if (biomeSource instanceof CustomBiomeProvider customBiomeProvider && !customBiomeProvider.isRegistryInitialized()) {
+            customBiomeProvider.setBiomeRegistry(region.registryAccess().lookupOrThrow(Registries.BIOME));
+        }
+        
+        int chunkX = chunk.getPos().x;
+        int chunkZ = chunk.getPos().z;
         CachedChunkData terraData = this.getTerraChunkData(chunkX, chunkZ);
-
-        int minWorldY = worldInfo.getMinHeight();
-        int maxWorldY = worldInfo.getMaxHeight();
-
-        // We start by finding the lowest 16x16x16 cube that's not underground
-        //TODO expose the minimum surface Y in Terra-- so we don't have to scan this way
-        int minSurfaceCubeY = blockToCube(minWorldY - this.yOffset);
-        int maxWorldCubeY = blockToCube(maxWorldY - this.yOffset);
-        if (terraData.aboveSurface(minSurfaceCubeY)) {
-            return; // All done, it's all air
-        }
-        while (minSurfaceCubeY < maxWorldCubeY && terraData.belowSurface(minSurfaceCubeY)) {
-            minSurfaceCubeY++;
-        }
-
-        // We can now fill most of the underground in a single call.
-        // Hopefully the underlying implementation can take advantage of that...
-        if (minSurfaceCubeY >= maxWorldCubeY) {
-            chunkData.setRegion(
-                    0, minWorldY, 0,
-                    16, maxWorldY, 16,
-                    STONE
-            );
-            return; // All done, everything is underground
-        } else {
-            chunkData.setRegion(
-                    0, minWorldY, 0,
-                    0, cubeToMinBlock(minSurfaceCubeY), 0,
-                    STONE
-            );
-        }
-
-        // And now, we build the actual terrain shape on top of everything
+        
+        int minY = region.getMinBuildHeight();
+        int maxY = region.getMaxBuildHeight();
+        
+        // Use the level seed from the world for deterministic generation
+        long worldSeed = region.getSeed();
+        Random random = new Random(worldSeed + (long)chunkX * 341873128712L + (long)chunkZ * 132897987541L);
+        
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
-                int groundHeight = min(terraData.groundHeight(x, z) + this.yOffset, maxWorldY - 1);
-                int waterHeight = min(terraData.waterHeight(x, z) + this.yOffset, maxWorldY - 1);
-                chunkData.setRegion(
-                        x, minWorldY, z,
-                        x + 1, groundHeight + 1, z + 1,
-                        STONE
-                );
-                chunkData.setRegion(
-                        x, groundHeight + 1, z,
-                        x + 1, waterHeight + 1, z + 1,
-                        WATER
-                );
-            }
-        }
-    }
-
-    @Override
-    public BiomeProvider getDefaultBiomeProvider(@NotNull WorldInfo worldInfo) {
-        return this.customBiomeProvider;
-    }
-
-    @Override
-    public void generateSurface(@NotNull WorldInfo worldInfo, @NotNull Random random, int chunkX, int chunkZ, @NotNull ChunkData chunkData) {
-        CachedChunkData terraData = this.getTerraChunkData(chunkX, chunkZ);
-        final int minWorldY = worldInfo.getMinHeight();
-        final int maxWorldY = worldInfo.getMaxHeight();
-        for (int x = 0; x < 16; x++) {
-            for (int z = 0; z < 16; z++) {
-
+                int worldX = chunkX * 16 + x;
+                int worldZ = chunkZ * 16 + z;
+                
                 int groundY = terraData.groundHeight(x, z) + this.yOffset;
-
-                // We do that for each column, so it does not depend on the configuration but only on the seed
                 int startMountainHeight = random.nextInt(7500, 7520);
-
-                if (groundY < minWorldY || groundY >= maxWorldY) {
-                    continue; // We are not within vertical bounds, continue
+                
+                if (groundY < minY || groundY >= maxY) {
+                    continue;
                 }
-
-                Material material;
-
-                BlockState state = terraData.surfaceBlock(x, z);
-                if (state != null) {
-                    // Terra--'s OSM config says a feature should be drawn there, let's transform it to respect our config
-                    material = this.materialMapping.get(state.getBlock().toString());
+                
+                BlockState material;
+                net.buildtheearth.terraminusminus.substitutes.BlockState terraState = terraData.surfaceBlock(x, z);
+                
+                if (terraState != null) {
+                    material = this.materialMapping.get(terraState.getBlock().toString());
                     if (material == null) {
-                        // We don't know what material this is, let's respect what the Terra-- configuration says
-                        material = BukkitBindings.getAsBlockData(state).getMaterial();
+                        material = convertTerraBlockState(terraState);
                     }
                 } else if (groundY >= startMountainHeight) {
-                    material = STONE; // Mountains stare bare
+                    material = Blocks.STONE.defaultBlockState();
                 } else {
-                    // Fallback to a generic block that matches the biome
-                    Biome biome = chunkData.getBiome(x, groundY, z);
-                    if (biome == DESERT) {
-                        material = Material.SAND;
-
-                    } else if (biome == SNOWY_SLOPES || biome == SNOWY_PLAINS || biome == FROZEN_PEAKS){
-                        material = SNOW_BLOCK;
-
+                    BlockPos pos = new BlockPos(worldX, groundY, worldZ);
+                    Holder<Biome> biome = chunk.getNoiseBiome(x >> 2, groundY >> 2, z >> 2);
+                    
+                    if (biome.is(Biomes.DESERT)) {
+                        material = Blocks.SAND.defaultBlockState();
+                    } else if (biome.is(Biomes.SNOWY_SLOPES) || biome.is(Biomes.SNOWY_PLAINS) || biome.is(Biomes.FROZEN_PEAKS)) {
+                        material = Blocks.SNOW_BLOCK.defaultBlockState();
                     } else {
-                        material = this.surfaceMaterial;
+                        material = Config.surfaceMaterial.defaultBlockState();
                     }
                 }
-
-                // We don't want grass, snow, and all underwater
-                boolean isUnderWater = groundY + 1 >= maxWorldY || chunkData.getBlockData(x, groundY + 1, z).getMaterial().equals(WATER);
-                if (isUnderWater && GRASS_LIKE_MATERIALS.contains(material)) {
-                    material = DIRT;
+                
+                boolean isUnderWater = groundY + 1 >= maxY || chunk.getBlockState(new BlockPos(worldX, groundY + 1, worldZ)).is(Blocks.WATER);
+                if (isUnderWater && GRASS_LIKE_BLOCKS.contains(material)) {
+                    material = Blocks.DIRT.defaultBlockState();
                 }
-
-                chunkData.setBlock(x, groundY, z, material);
-
+                
+                chunk.setBlockState(new BlockPos(worldX, groundY, worldZ), material, false);
             }
         }
+    }
+
+    @Override
+    public void applyBiomeDecoration(WorldGenLevel level, ChunkAccess chunk, StructureManager structureManager) {
+        // Trees will be handled through features if enabled
+    }
+
+    @Override
+    public CompletableFuture<ChunkAccess> fillFromNoise(Blender blender, RandomState randomState, StructureManager structureManager, ChunkAccess chunk) {
+        return CompletableFuture.supplyAsync(() -> {
+            int chunkX = chunk.getPos().x;
+            int chunkZ = chunk.getPos().z;
+            CachedChunkData terraData = this.getTerraChunkData(chunkX, chunkZ);
+            
+            int minY = chunk.getMinBuildHeight();
+            int maxY = chunk.getMaxBuildHeight();
+            
+            int minSurfaceCubeY = blockToCube(minY - this.yOffset);
+            int maxWorldCubeY = blockToCube(maxY - this.yOffset);
+            
+            if (terraData.aboveSurface(minSurfaceCubeY)) {
+                return chunk;
+            }
+            
+            while (minSurfaceCubeY < maxWorldCubeY && terraData.belowSurface(minSurfaceCubeY)) {
+                minSurfaceCubeY++;
+            }
+            
+            if (minSurfaceCubeY >= maxWorldCubeY) {
+                for (int x = 0; x < 16; x++) {
+                    for (int z = 0; z < 16; z++) {
+                        for (int y = minY; y < maxY; y++) {
+                            chunk.setBlockState(new BlockPos(chunkX * 16 + x, y, chunkZ * 16 + z), Blocks.STONE.defaultBlockState(), false);
+                        }
+                    }
+                }
+                return chunk;
+            } else {
+                int fillUpToY = cubeToMinBlock(minSurfaceCubeY) + this.yOffset;
+                for (int x = 0; x < 16; x++) {
+                    for (int z = 0; z < 16; z++) {
+                        for (int y = minY; y < fillUpToY && y < maxY; y++) {
+                            chunk.setBlockState(new BlockPos(chunkX * 16 + x, y, chunkZ * 16 + z), Blocks.STONE.defaultBlockState(), false);
+                        }
+                    }
+                }
+            }
+            
+            for (int x = 0; x < 16; x++) {
+                for (int z = 0; z < 16; z++) {
+                    int worldX = chunkX * 16 + x;
+                    int worldZ = chunkZ * 16 + z;
+                    
+                    int groundHeight = min(terraData.groundHeight(x, z) + this.yOffset, maxY - 1);
+                    int waterHeight = min(terraData.waterHeight(x, z) + this.yOffset, maxY - 1);
+                    
+                    for (int y = minY; y <= groundHeight && y < maxY; y++) {
+                        chunk.setBlockState(new BlockPos(worldX, y, worldZ), Blocks.STONE.defaultBlockState(), false);
+                    }
+                    
+                    for (int y = groundHeight + 1; y <= waterHeight && y < maxY; y++) {
+                        chunk.setBlockState(new BlockPos(worldX, y, worldZ), Blocks.WATER.defaultBlockState(), false);
+                    }
+                }
+            }
+            
+            return chunk;
+        });
+    }
+
+    @Override
+    public int getBaseHeight(int x, int z, Heightmap.Types heightmapType, LevelHeightAccessor level, RandomState randomState) {
+        int chunkX = blockToCube(x);
+        int chunkZ = blockToCube(z);
+        int localX = x - cubeToMinBlock(chunkX);
+        int localZ = z - cubeToMinBlock(chunkZ);
+        
+        CachedChunkData terraData = this.getTerraChunkData(chunkX, chunkZ);
+        
+        return switch (heightmapType) {
+            case OCEAN_FLOOR, OCEAN_FLOOR_WG -> terraData.groundHeight(localX, localZ) + this.yOffset;
+            default -> terraData.surfaceHeight(localX, localZ) + this.yOffset;
+        };
+    }
+
+    @Override
+    public NoiseColumn getBaseColumn(int x, int z, LevelHeightAccessor level, RandomState randomState) {
+        BlockState[] states = new BlockState[level.getHeight()];
+        int baseHeight = getBaseHeight(x, z, Heightmap.Types.OCEAN_FLOOR, level, randomState);
+        
+        for (int y = level.getMinBuildHeight(); y < baseHeight && y < level.getMaxBuildHeight(); y++) {
+            states[y - level.getMinBuildHeight()] = Blocks.STONE.defaultBlockState();
+        }
+        
+        return new NoiseColumn(level.getMinBuildHeight(), states);
+    }
+
+    @Override
+    public void addDebugScreenInfo(List<String> info, RandomState randomState, BlockPos pos) {
+        info.add("Terra-- Real World Generator");
+        info.add("Y Offset: " + this.yOffset);
+    }
+
+    @Override
+    public void createStructures(RegistryAccess registryAccess, ChunkGeneratorStructureState structureState, StructureManager structureManager, ChunkAccess chunk, StructureTemplateManager templateManager) {
+        // No structures
+    }
+
+    @Override
+    public void createReferences(WorldGenLevel level, StructureManager structureManager, ChunkAccess chunk) {
+        // No structure references
+    }
+
+    @Override
+    public int getGenDepth() {
+        return 384;
+    }
+
+    @Override
+    public int getSeaLevel() {
+        return 63 + this.yOffset;
+    }
+
+    @Override
+    public int getMinY() {
+        return -64;
+    }
+
+    @Override
+    public void spawnOriginalMobs(WorldGenRegion region) {
+        // No mob spawning
     }
 
     private CachedChunkData getTerraChunkData(int chunkX, int chunkZ) {
         try {
             return this.cache.getUnchecked(new ChunkPos(chunkX, chunkZ)).get();
         } catch (InterruptedException | ExecutionException e) {
-            throw new RuntimeException("Unrecoverable exception when generating chunk data asynchronously in Terra--", e);
+            throw new CompletionException("Failed to generate chunk data", e);
         }
     }
 
-    public void generateBedrock(@NotNull WorldInfo worldInfo, @NotNull Random random, int x, int z, @NotNull ChunkGenerator.ChunkData chunkData) {
-        // no bedrock, because bedrock bad
-    }
-
-    public void generateCaves(@NotNull WorldInfo worldInfo, @NotNull Random random, int x, int z, @NotNull ChunkGenerator.ChunkData chunkData) {
-        // no caves, because caves scary
-    }
-
-
-    public int getBaseHeight(@NotNull WorldInfo worldInfo, @NotNull Random random, int x, int z, @NotNull HeightMap heightMap) {
-        int chunkX = blockToCube(x);
-        int chunkZ = blockToCube(z);
-        x -= cubeToMinBlock(chunkX);
-        z -= cubeToMinBlock(chunkZ);
-        CachedChunkData terraData = this.getTerraChunkData(chunkX, chunkZ);
-        switch (heightMap) {
-            case OCEAN_FLOOR, OCEAN_FLOOR_WG -> {
-                return terraData.groundHeight(x, z) + this.yOffset;
-            }
-            default -> {
-                return terraData.surfaceHeight(x, z) + this.yOffset;
-            }
-        }
-    }
-
-    public boolean canSpawn(@NotNull World world, int x, int z) {
-        Block highest = world.getBlockAt(x, world.getHighestBlockYAt(x, z), z);
-
-        return switch (world.getEnvironment()) {
-            case NETHER -> true;
-            case THE_END ->
-                    highest.getType() != Material.AIR && highest.getType() != WATER && highest.getType() != Material.LAVA;
-            default -> highest.getType() == Material.SAND || highest.getType() == Material.GRAVEL;
+    private BlockState convertTerraBlockState(net.buildtheearth.terraminusminus.substitutes.BlockState terraState) {
+        String blockName = terraState.getBlock().toString();
+        return switch (blockName) {
+            case "minecraft:stone" -> Blocks.STONE.defaultBlockState();
+            case "minecraft:dirt" -> Blocks.DIRT.defaultBlockState();
+            case "minecraft:grass_block" -> Blocks.GRASS_BLOCK.defaultBlockState();
+            case "minecraft:water" -> Blocks.WATER.defaultBlockState();
+            case "minecraft:sand" -> Blocks.SAND.defaultBlockState();
+            case "minecraft:gravel" -> Blocks.GRAVEL.defaultBlockState();
+            case "minecraft:bricks" -> Blocks.BRICKS.defaultBlockState();
+            case "minecraft:gray_concrete" -> Blocks.GRAY_CONCRETE.defaultBlockState();
+            case "minecraft:dirt_path" -> Blocks.DIRT_PATH.defaultBlockState();
+            default -> Blocks.STONE.defaultBlockState();
         };
     }
-
-    @NotNull
-    public List<BlockPopulator> getDefaultPopulators(@NotNull World world) {
-        return Collections.singletonList(new TreePopulator(customBiomeProvider, yOffset));
-    }
-
-    @Nullable
-    public Location getFixedSpawnLocation(@NotNull World world, @NotNull Random random) {
-        if (spawnLocation == null)
-            spawnLocation = new Location(world, 3517417, 58, -5288234);
-        return spawnLocation;
-    }
-
-    public boolean shouldGenerateNoise() {
-        return false;
-    }
-
-
-    public boolean shouldGenerateSurface() {
-        return false;
-    }
-
-
-    public boolean shouldGenerateBedrock() {
-        return false;
-    }
-
-
-    public boolean shouldGenerateCaves() {
-        return false;
-    }
-
-
-    public boolean shouldGenerateDecorations() {
-        return false;
-    }
-
-
-    public boolean shouldGenerateMobs() {
-        return false;
-    }
-
-    public boolean shouldGenerateStructures() {
-        return false;
-    }
-}
+} 
